@@ -23,7 +23,7 @@ SHEET_CONFIG = "config"
 
 # Required columns (snake_case)
 REQ_NODO = {"nodo_id", "nombre", "cota_m", "tipo_cond_borde", "valor_cond_borde"}
-REQ_TUBO = {"tubo_id", "nombre", "nodo_inicio", "nodo_fin", "longitud_m", "diametro_int_m"}
+REQ_TUBO = {"tubo_id", "nombre", "nodo_inicio", "nodo_fin", "longitud_m", "diametro_int_mm"}
 REQ_EVENTO = {"evento_id", "tipo_evento", "objetivo_tipo", "objetivo_id", "t_inicio_s", "t_fin_s"}
 REQ_CONFIG = {"clave", "valor"}
 
@@ -240,10 +240,11 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         node_to = node_uid_by_excel_id[n_to_excel]
 
         L = _as_float(r["longitud_m"], "longitud_m", SHEET_TUBERIA, f"tubo_id={tubo_id}")
-        D = _as_float(r["diametro_int_m"], "diametro_int_m", SHEET_TUBERIA, f"tubo_id={tubo_id}")
-
+        D_mm = _as_float(r["diametro_int_mm"], "diametro_int_mm", SHEET_TUBERIA, f"tubo_id={tubo_id}")
+        D= D_mm / 1000.0  # convert mm to m
+        e_mm= _maybe_float(r.get("espesor_mm", None))
         material = _norm_str(r.get("material", "")) or None
-        thickness = _maybe_float(r.get("espesor_m", None))
+        thickness = (e_mm / 1000.0) if e_mm is not None else None  # convert mm to m
         elasticity = _maybe_float(r.get("e_pa", None)) or _maybe_float(r.get("E_Pa", None))  # tolerate casing
         poisson = _maybe_float(r.get("nu", None))
         wave_speed = _maybe_float(r.get("a_mps", None))
