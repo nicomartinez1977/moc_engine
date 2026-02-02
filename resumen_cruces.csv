@@ -1,0 +1,5 @@
+cruce_id,nombre,s_m,s_used_m,hmin_m,hmax_m,cav_any
+C1,Estero Salto de Agua,1250.0,1000.0,2.0,1036.4327973385507,False
+C2,Canal 1,2100.0,1000.0,2.0,1036.4327973385507,False
+C3,Canal 2,3300.0,1000.0,2.0,1036.4327973385507,False
+C4,Estero 3,4100.0,1000.0,2.0,1036.4327973385507,False

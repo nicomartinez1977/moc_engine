@@ -43,3 +43,8 @@ export_profile_excel(prof, "perfil_critico.xlsx")
 export_pipe_summary_csv(net, ranges, prof, "resumen_por_tubo.csv")
 
 print("EXPORT OK")
+from moc.core.postprocess.crossings import evaluate_crossings_nearest, export_crossing_results_csv
+
+crossings = evaluate_crossings_nearest(prof, "cruces.csv")
+export_crossing_results_csv(crossings, "resumen_cruces.csv")
+print("CRUCES OK")
