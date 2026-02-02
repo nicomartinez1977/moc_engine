@@ -40,11 +40,11 @@ def _build_chain_order(network: Network) -> Tuple[str, List[str], str]:
     # upstream candidates: reservoir with outgoing pipes
     candidates = []
     for nuid, n in network.nodes.items():
-        if n.bc_type == "reservoir" and n.bc_value is not None and nuid in pipes_by_from:
+        if n.bc_type in ("reservoir", "pump") and n.bc_value is not None and nuid in pipes_by_from:
             candidates.append(nuid)
 
     if not candidates:
-        raise ValueError("Cannot build chain: no reservoir node with outgoing pipe.")
+        raise ValueError("El nodo inicial debe ser 'estanque' o 'bomba' con bc_value (carga en m).")
 
     candidates.sort(key=lambda nid: len(pipes_by_from.get(nid, [])))
     start = candidates[0]

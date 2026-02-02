@@ -2,81 +2,106 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import List
+import numpy as np
 import pandas as pd
 
 from moc.core.postprocess.crossings import CrossingResult
+from moc.core.postprocess.geometry import GeometryProfile
 
 
 @dataclass(frozen=True)
 class CrossingEngineeringRow:
     cruce_id: str
     nombre: str
-    s_m: float
+    s: float
 
-    hmin_m: float
-    hmax_m: float
+    z: float
 
-    pmin_mca: float
-    pmax_mca: float
-    pmin_bar: float
-    pmax_bar: float
+    hmin: float
+    hmax: float
 
-    margen_cavitacion_m: float
+    pmin: float
+    pmax: float
+
+    margen_cavitacion: float
     cavita: bool
 
     criterio_gobierno: str
 
 
-def crossings_engineering_report(
+def _interp_linear(x: np.ndarray, y: np.ndarray, xq: float) -> float:
+    if xq < float(x[0]) or xq > float(x[-1]):
+        raise ValueError(
+            f"El punto s_m={xq} está fuera del rango del perfil [{float(x[0])}, {float(x[-1])}] m."
+        )
+
+    j = int(np.searchsorted(x, xq, side="right"))
+    j0 = max(0, j - 1)
+    j1 = min(len(x) - 1, j)
+
+    x0, x1 = float(x[j0]), float(x[j1])
+    y0, y1 = float(y[j0]), float(y[j1])
+
+    if x1 == x0:
+        return y0
+
+    w = (xq - x0) / (x1 - x0)
+    return y0 * (1.0 - w) + y1 * w
+
+
+def crossings_engineering_report_mca(
     crossings: List[CrossingResult],
+    geom: GeometryProfile,
     *,
     hvap_m: float,
-    rho: float = 1000.0,
-    g: float = 9.81,
-    top_n: int = 1
+    top_n: int = 1,
 ) -> List[CrossingEngineeringRow]:
     """
-    Build an engineering-style report for crossings.
+    Reporte de ingeniería por cruce en m/mca.
+
+    - z: interpolado desde GeometryProfile
+    - p = H - z  (mca)
+    - margen_cavitacion = pmin - hvap_m  (mca)
 
     criterio_gobierno:
-      - sobrepresion: in top_n highest Hmax
-      - depresion: in top_n lowest Hmin
-      - cavitacion: cav_any True and in top_n lowest (Hmin - Hvap)
-      - combinations joined with '+'
-      - 'ninguno' otherwise
+      - sobrepresion: top_n por pmax (mayor)
+      - depresion: top_n por pmin (menor)
+      - cavitacion: top_n por margen_cavitacion (menor) entre cavitantes
     """
     if not crossings:
         return []
 
-    def m_to_bar(h_m: float) -> float:
-        return (rho * g * h_m) / 1e5
-
     n = max(1, int(top_n))
 
-    # Overpressure: highest Hmax
-    sorted_over = sorted(crossings, key=lambda c: c.hmax_m, reverse=True)
-    over_set = {c.crossing_id for c in sorted_over[:n]}
-
-    # Depression: lowest Hmin
-    sorted_under = sorted(crossings, key=lambda c: c.hmin_m)
-    under_set = {c.crossing_id for c in sorted_under[:n]}
-
-    # Cavitation governing: among cavitating points, lowest margin first
-    cav_cross = [c for c in crossings if bool(c.cav_any)]
-    cav_set = set()
-    if cav_cross:
-        cav_sorted = sorted(cav_cross, key=lambda c: (c.hmin_m - hvap_m))
-        cav_set = {c.crossing_id for c in cav_sorted[:n]}
-
-    rows: List[CrossingEngineeringRow] = []
+    tmp = []
     for c in crossings:
-        margen = c.hmin_m - hvap_m
+        zc = _interp_linear(geom.s_m, geom.z_m, float(c.s_m))
+        pmin = float(c.hmin_m) - zc
+        pmax = float(c.hmax_m) - zc
+
+        margen = pmin - float(hvap_m)
         cavita = bool(c.cav_any) or (margen < 0.0)
 
-        # v0.1: treat head as mca proxy directly
-        pmin_mca = float(c.hmin_m)
-        pmax_mca = float(c.hmax_m)
+        tmp.append({
+            "cruce": c,
+            "z": zc,
+            "pmin": pmin,
+            "pmax": pmax,
+            "margen": margen,
+            "cavita": cavita,
+        })
 
+    over_set = {t["cruce"].crossing_id for t in sorted(tmp, key=lambda r: r["pmax"], reverse=True)[:n]}
+    under_set = {t["cruce"].crossing_id for t in sorted(tmp, key=lambda r: r["pmin"])[:n]}
+
+    cav_tmp = [t for t in tmp if t["cavita"]]
+    cav_set = set()
+    if cav_tmp:
+        cav_set = {t["cruce"].crossing_id for t in sorted(cav_tmp, key=lambda r: r["margen"])[:n]}
+
+    rows: List[CrossingEngineeringRow] = []
+    for t in tmp:
+        c = t["cruce"]
         flags = []
         if c.crossing_id in over_set:
             flags.append("sobrepresion")
@@ -84,24 +109,23 @@ def crossings_engineering_report(
             flags.append("depresion")
         if c.crossing_id in cav_set:
             flags.append("cavitacion")
-
         criterio = "+".join(flags) if flags else "ninguno"
 
         rows.append(CrossingEngineeringRow(
             cruce_id=c.crossing_id,
             nombre=c.name,
-            s_m=float(c.s_m),
+            s=float(c.s_m),
 
-            hmin_m=float(c.hmin_m),
-            hmax_m=float(c.hmax_m),
+            z=float(t["z"]),
 
-            pmin_mca=pmin_mca,
-            pmax_mca=pmax_mca,
-            pmin_bar=float(m_to_bar(pmin_mca)),
-            pmax_bar=float(m_to_bar(pmax_mca)),
+            hmin=float(c.hmin_m),
+            hmax=float(c.hmax_m),
 
-            margen_cavitacion_m=float(margen),
-            cavita=bool(cavita),
+            pmin=float(t["pmin"]),
+            pmax=float(t["pmax"]),
+
+            margen_cavitacion=float(t["margen"]),
+            cavita=bool(t["cavita"]),
 
             criterio_gobierno=criterio,
         ))
@@ -109,6 +133,35 @@ def crossings_engineering_report(
     return rows
 
 
+_UNITS_REPORT = {
+    "cruce_id": "-",
+    "nombre": "-",
+    "s": "m",
+    "z": "m",
+    "hmin": "m",
+    "hmax": "m",
+    "pmin": "mca",
+    "pmax": "mca",
+    "margen_cavitacion": "mca",
+    "cavita": "-",
+    "criterio_gobierno": "-",
+}
+
+
+def _df_with_units_row(df: pd.DataFrame, units: dict) -> pd.DataFrame:
+    unit_row = {col: units.get(col, "-") for col in df.columns}
+    return pd.concat([pd.DataFrame([unit_row]), df], ignore_index=True)
+
+
 def export_crossings_engineering_csv(rows: List[CrossingEngineeringRow], path_csv: str) -> None:
     df = pd.DataFrame([r.__dict__ for r in rows])
-    df.to_csv(path_csv, index=False)
+    df_out = _df_with_units_row(df, _UNITS_REPORT)
+    df_out.to_csv(path_csv, index=False)
+
+
+def export_crossings_engineering_excel(rows: List[CrossingEngineeringRow], path_xlsx: str, sheet_name: str = "cruces") -> None:
+    import openpyxl  # ensures dependency exists
+    df = pd.DataFrame([r.__dict__ for r in rows])
+    df_out = _df_with_units_row(df, _UNITS_REPORT)
+    with pd.ExcelWriter(path_xlsx, engine="openpyxl") as writer:
+        df_out.to_excel(writer, sheet_name=sheet_name, index=False)

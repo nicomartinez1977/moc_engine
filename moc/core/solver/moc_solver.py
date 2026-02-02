@@ -56,7 +56,7 @@ def _build_chain_order(network: Network) -> Tuple[str, List[Pipe], str]:
     # Candidate upstream nodes: reservoirs that have outgoing pipes
     candidates = []
     for n in network.nodes.values():
-        if n.bc_type == "reservoir" and n.bc_value is not None and n.uid in pipes_by_from:
+        if n.bc_type in ("reservoir", "pump") and n.bc_value is not None and n.uid in pipes_by_from:
             candidates.append(n.uid)
 
     if not candidates:
@@ -143,8 +143,8 @@ def run_moc_v01(
     up_node = network.nodes[up_uid]
     dn_node = network.nodes[dn_uid]
 
-    if up_node.bc_type != "reservoir" or up_node.bc_value is None:
-        raise ValueError("Upstream node must be a reservoir with bc_value (head).")
+    if up_node.bc_type not in ("reservoir", "pump") or up_node.bc_value is None:
+        raise ValueError("El nodo inicial debe ser 'estanque' o 'bomba' con bc_value (carga en m).")
 
     H_up = float(up_node.bc_value)
 
