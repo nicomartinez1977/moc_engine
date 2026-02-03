@@ -28,7 +28,7 @@ from moc.core.postprocess.plots import plot_all_crossings
 # =========================
 # CONFIG
 # =========================
-path = r"C:/Users/Legion/Programas_Python/moc_engine/moc_input_v0_1.xlsx"
+path = r"C:/Users/Legion/Programas_Python/moc_engine/moc/examples/excel/moc_input_v0_1.xlsx"
 cruces_csv = "cruces.csv"
 
 # =========================

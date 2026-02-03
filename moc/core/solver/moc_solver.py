@@ -202,7 +202,13 @@ def run_moc_v01(
     if H_dn is not None:
         H = np.linspace(H_up, H_dn, npts, dtype=float)
     else:
-        H = np.full(npts, H_up, dtype=float)
+        # Steady-state head profile for constant Q0 including friction losses
+        dH_seg = R_seg * Q0 * abs(Q0)   # length n_cells_total
+        H = np.empty(npts, dtype=float)
+        H[0] = H_up
+        for i in range(1, npts):
+            # node i is after segment i-1
+            H[i] = H[i-1] - dH_seg[i-1]
 
     H_hist = np.zeros((nt, npts), dtype=float)
     Q_hist = np.zeros((nt, npts), dtype=float)

@@ -33,18 +33,18 @@ REQ_CONFIG = {"Variable", "Valor"}
 # Mapeos (Excel español -> core inglés)
 # =========================
 BC_MAP = {
-    "Ninguno": "none",
-    "Estanque": "reservoir",
-    "Demanda": "demand",
-    "Valvula": "valve",
-    "Bomba": "pump",
+    "none": "none",
+    "estanque": "reservoir",
+    "demanda": "demand",
+    "valvula": "valve",
+    "bomba": "pump",
 }
 
 EVENT_MAP = {
-    "Cierre de Valvula": "valve_close",
-    "Apertura de Valvula": "valve_open",
-    "Parada de Bomba": "pump_trip",
-    "Partida de Bomba": "pump_start",
+    "cierre de valvula": "valve_close",
+    "apertura de valvula": "valve_open",
+    "parada de bomba": "pump_trip",
+    "partida de bomba": "pump_start",
 }
 
 MATERIAL_MAP ={
@@ -66,44 +66,44 @@ ALLOWED_OBJETIVO_TIPO = {"nodo", "tubo"}
 # Nota: permitimos algunos sinónimos (ej: '-' o '' para adimensional)
 EXPECTED_UNITS_NODO = {
     "nodo_id": {"-", "", None},
-    "nombre": {"-", "", None},
-    "cota_m": {"m"},
-    "tipo_cond_borde": {"-", "", None},
+    "Nombre": {"-", "", None},
+    "Cota": {"m","[m]"},
+    "Condicion de Borde": {"-", "", None},
     # valor_cond_borde: en tu modelo representa una "carga" H (m)
-    "valor_cond_borde": {"m", "mca"},  # aceptamos m o mca para ser tolerantes
+    "Valor Condcion de Borde": {"m", "mca","[mca]"},  # aceptamos m o mca para ser tolerantes
 }
 
 EXPECTED_UNITS_TUBO = {
     "tubo_id": {"-", "", None},
-    "nombre": {"-", "", None},
-    "nodo_inicio": {"-", "", None},
-    "nodo_fin": {"-", "", None},
-    "longitud_m": {"m"},
-    "diametro_int_mm": {"mm"},
+    "Nombre Tramo": {"-", "", None},
+    "nodo inicial": {"-", "", None},
+    "nodo final": {"-", "", None},
+    "Longitud": {"m","[m]"},
+    "Diametro Nominal": {"mm","[mm]"},
     # opcional
-    "espesor_mm": {"mm"},
-    "E_Pa": {"Pa"},
+    "espesor": {"mm", "[mm]"},
+    "E_Pa": {"Pa", "[Pa]"},
     "nu": {"-", "", None},
-    "a_mps": {"m/s", "mps", "m/s "},  # tolerante
+    "a_mps": {"m/s", "mps", "m/s ", "[m/s]"},  # tolerante
     "f_darcy": {"-", "", None},
-    "dx_obj_m": {"m"},
+    "dx_obj_m": {"m", "[m]"},
     "external_id": {"-", "", None},
 }
 
 EXPECTED_UNITS_EVENTOS = {
     "evento_id": {"-", "", None},
-    "tipo_evento": {"-", "", None},
-    "objetivo_tipo": {"-", "", None},
+    "Tipo de Evento": {"-", "", None},
+    "Tipo de Objetivo": {"-", "", None},
     "objetivo_id": {"-", "", None},
-    "t_inicio_s": {"s"},
-    "t_fin_s": {"s"},
+    "Tiempo Inicio": {"s", "[s]"},
+    "Tiempo Fin": {"s", "[s]"},
     "parametros_json": {"-", "", None},
 }
 
 EXPECTED_UNITS_CONFIG = {
-    "clave": {"-", "", None},
+    "Variable": {"-", "", None},
     # valor puede ser numérico o texto; unidad puede variar, aceptamos '-'
-    "valor": {"-", "", None, "m", "mca", "s", "mm"},
+    "Valor": {"-", "", None, "m", "mca", "s", "mm"},
 }
 
 
@@ -253,10 +253,10 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
     # -----------------------------
     config: Dict[str, Any] = {}
     for _, r in df_config.iterrows():
-        key = _norm_lower(r["clave"])
+        key = _norm_lower(r["Variable"])
         if not key:
             continue
-        val = r["valor"]
+        val = r["Valor"]
 
         # coerce numéricos si corresponde
         if isinstance(val, str):
@@ -288,21 +288,21 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         if not nodo_id:
             continue
 
-        name = _norm_str(r["nombre"]) or nodo_id
-        z = _as_float(r["cota_m"], "cota_m", SHEET_NODO, f"nodo_id={nodo_id}")
+        name = _norm_str(r["Nombre"]) or nodo_id
+        z = _as_float(r["Cota"], "Cota", SHEET_NODO, f"nodo_id={nodo_id}")
 
-        bc_sp = _norm_lower(r["tipo_cond_borde"]) or "none"
+        bc_sp = _norm_lower(r["Condicion de Borde"]) or "none"
         if bc_sp not in BC_MAP:
             raise ValueError(
-                f"[{SHEET_NODO}] tipo_cond_borde inválido en nodo_id={nodo_id}: {bc_sp!r}. "
+                f"[{SHEET_NODO}] Condicion de Borde inválido en nodo_id={nodo_id}: {bc_sp!r}. "
                 f"Permitidos: {sorted(BC_MAP.keys())}"
             )
         bc_type = BC_MAP[bc_sp]
 
-        bc_value_norm = _maybe_float(r["valor_cond_borde"])
+        bc_value_norm = _maybe_float(r["Valor Condcion de Borde"])
         if bc_type != "none" and bc_value_norm is None:
             raise ValueError(
-                f"[{SHEET_NODO}] Falta valor_cond_borde para nodo_id={nodo_id} cuando tipo_cond_borde={bc_sp!r}"
+                f"[{SHEET_NODO}] Falta Valor Condcion de Borde para nodo_id={nodo_id} cuando Condicion de Borde={bc_sp!r}"
             )
 
         external_id = _norm_str(r.get("external_id", "")) or None
@@ -337,26 +337,26 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         if not tubo_id:
             continue
 
-        name = _norm_str(r["nombre"]) or tubo_id
+        name = _norm_str(r["Nombre Tramo"]) or tubo_id
 
-        n_from_excel = _norm_str(r["nodo_inicio"])
-        n_to_excel = _norm_str(r["nodo_fin"])
+        n_from_excel = _norm_str(r["nodo inicial"])
+        n_to_excel = _norm_str(r["nodo final"])
 
         if n_from_excel not in node_uid_by_excel_id:
-            raise ValueError(f"[{SHEET_TUBERIA}] nodo_inicio desconocido '{n_from_excel}' (tubo_id={tubo_id})")
+            raise ValueError(f"[{SHEET_TUBERIA}] nodo inicial desconocido '{n_from_excel}' (tubo_id={tubo_id})")
         if n_to_excel not in node_uid_by_excel_id:
-            raise ValueError(f"[{SHEET_TUBERIA}] nodo_fin desconocido '{n_to_excel}' (tubo_id={tubo_id})")
+            raise ValueError(f"[{SHEET_TUBERIA}] nodo final desconocido '{n_to_excel}' (tubo_id={tubo_id})")
 
         node_from = node_uid_by_excel_id[n_from_excel]
         node_to = node_uid_by_excel_id[n_to_excel]
 
-        L = _as_float(r["longitud_m"], "longitud_m", SHEET_TUBERIA, f"tubo_id={tubo_id}")
+        L = _as_float(r["Longitud"], "Longitud", SHEET_TUBERIA, f"tubo_id={tubo_id}")
 
         # mm -> m
-        D_mm = _as_float(r["diametro_int_mm"], "diametro_int_mm", SHEET_TUBERIA, f"tubo_id={tubo_id}")
+        D_mm = _as_float(r["Diametro Nominal"], "Diametro Nominal", SHEET_TUBERIA, f"tubo_id={tubo_id}")
         D = D_mm / 1000.0
 
-        e_mm = _maybe_float(r.get("espesor_mm", None))
+        e_mm = _maybe_float(r.get("espesor", None))
         thickness = (e_mm / 1000.0) if e_mm is not None else None
 
         material = _norm_str(r.get("material", "")) or None
@@ -404,18 +404,18 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         if not evento_id:
             continue
 
-        tipo_sp = _norm_lower(r["tipo_evento"])
+        tipo_sp = _norm_lower(r["Tipo de Evento"])
         if tipo_sp not in EVENT_MAP:
             raise ValueError(
-                f"[{SHEET_EVENTOS}] tipo_evento inválido en evento_id={evento_id}: {tipo_sp!r}. "
+                f"[{SHEET_EVENTOS}] Tipo de Evento inválido en evento_id={evento_id}: {tipo_sp!r}. "
                 f"Permitidos: {sorted(EVENT_MAP.keys())}"
             )
         event_type = EVENT_MAP[tipo_sp]
 
-        obj_tipo = _norm_lower(r["objetivo_tipo"])
+        obj_tipo = _norm_lower(r["Tipo de Objetivo"])
         if obj_tipo not in ALLOWED_OBJETIVO_TIPO:
             raise ValueError(
-                f"[{SHEET_EVENTOS}] objetivo_tipo inválido en evento_id={evento_id}: {obj_tipo!r}. "
+                f"[{SHEET_EVENTOS}] Tipo de Objetivo inválido en evento_id={evento_id}: {obj_tipo!r}. "
                 f"Permitidos: {sorted(ALLOWED_OBJETIVO_TIPO)}"
             )
 
@@ -429,10 +429,10 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
                 raise ValueError(f"[{SHEET_EVENTOS}] objetivo_id tubo desconocido '{obj_id}' (evento_id={evento_id})")
             target_uid = pipe_uid_by_excel_id[obj_id]
 
-        t_start = _as_float(r["t_inicio_s"], "t_inicio_s", SHEET_EVENTOS, f"evento_id={evento_id}")
-        t_end = _as_float(r["t_fin_s"], "t_fin_s", SHEET_EVENTOS, f"evento_id={evento_id}")
+        t_start = _as_float(r["Tiempo Inicio"], "Tiempo Inicio", SHEET_EVENTOS, f"evento_id={evento_id}")
+        t_end = _as_float(r["Tiempo Fin"], "Tiempo Fin", SHEET_EVENTOS, f"evento_id={evento_id}")
         if t_end < t_start:
-            raise ValueError(f"[{SHEET_EVENTOS}] t_fin_s < t_inicio_s en evento_id={evento_id}")
+            raise ValueError(f"[{SHEET_EVENTOS}] Tiempo Fin < Tiempo Inicio en evento_id={evento_id}")
 
         params = _parse_params_json(r.get("parametros_json", ""))
 
