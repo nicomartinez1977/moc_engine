@@ -38,12 +38,16 @@ class Pipe:
     poisson: Optional[float] = None            # nu [-]
 
     wave_speed: Optional[float] = None         # a [m/s]
-    friction: Optional[float] = None           # Darcy f [-]
 
+
+    friction: Optional[float] = None      # Darcy f [-] (si None, se calcula)
+    roughness: Optional[float] = None     # ε [m] rugosidad absoluta (si None, usar default)
+    
     dx_target: Optional[float] = None          # preferred spatial step [m]
 
     external_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, object] = field(default_factory=dict)
+
 
     @property
     def area(self) -> float:

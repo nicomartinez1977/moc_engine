@@ -17,9 +17,18 @@ from moc.core.build.timestep import TimeStepResult
 class MocRunConfig:
     q0_m3s: float
     t_end_s: float
-    hvap_m: float = -9.5          # head threshold for cavitation detection (relative)
+
+    # Cavitación (umbral en términos de carga H)
+    hvap_m: float = -9.5
     enable_cavitation_clamp: bool = True
+
+    # Fricción
     default_f_darcy: float = 0.02
+
+    # ✅ Nuevo: modo de condición inicial
+    # - "flat": H plano (comportamiento actual)
+    # - "steady_friction": arma H(x,0) consistente con Q0 y pérdidas R*Q|Q|
+    init_mode: str = "steady_friction"
 
 
 @dataclass(frozen=True)
@@ -45,7 +54,7 @@ def _build_chain_order(network: Network) -> Tuple[str, List[Pipe], str]:
     Build a linear chain order (single path) from an upstream node to downstream node.
 
     Strategy:
-    - pick upstream as a reservoir node with at least one outgoing pipe (node_from)
+    - pick upstream as a reservoir/pump node with at least one outgoing pipe (node_from)
     - follow unique outgoing connections until no more pipes
     - requires exactly one outgoing pipe per internal node in the chain
     """
@@ -53,16 +62,16 @@ def _build_chain_order(network: Network) -> Tuple[str, List[Pipe], str]:
     for p in network.pipes.values():
         pipes_by_from.setdefault(p.node_from, []).append(p)
 
-    # Candidate upstream nodes: reservoirs that have outgoing pipes
+    # Candidate upstream nodes: reservoirs/pumps that have outgoing pipes
     candidates = []
     for n in network.nodes.values():
         if n.bc_type in ("reservoir", "pump") and n.bc_value is not None and n.uid in pipes_by_from:
             candidates.append(n.uid)
 
     if not candidates:
-        raise ValueError("Cannot build chain: no reservoir node with outgoing pipe found (need upstream reservoir).")
+        raise ValueError("Cannot build chain: no reservoir node with outgoing pipe found (need upstream reservoir/pump).")
 
-    # Prefer reservoir with exactly one outgoing pipe
+    # Prefer upstream with exactly one outgoing pipe (simple chain)
     candidates.sort(key=lambda nid: len(pipes_by_from.get(nid, [])))
     start = candidates[0]
 
@@ -74,7 +83,6 @@ def _build_chain_order(network: Network) -> Tuple[str, List[Pipe], str]:
         visited_nodes.add(cur)
         outs = pipes_by_from.get(cur, [])
         if len(outs) == 0:
-            # end reached
             end = cur
             break
         if len(outs) > 1:
@@ -93,24 +101,31 @@ def _build_chain_order(network: Network) -> Tuple[str, List[Pipe], str]:
     return start, chain, end
 
 
-def _event_valve_factor(network: Network, t: float) -> Optional[float]:
+def _event_valve_factor(network: Network, t: float, *, target_uid: Optional[str] = None) -> Optional[float]:
     """
-    Returns a multiplicative factor phi(t) for downstream flow if an applicable event exists.
+    Returns a multiplicative factor phi(t) for downstream flow.
     Supported event types (v0.1):
       - valve_close
       - pump_trip
+
     Interpretation: Q_end = Q0 * phi(t), where phi transitions 1 -> 0 over [t_start, t_end]
+
+    NOTE: Si target_uid se entrega, se aplican solo eventos cuyo target_uid coincida.
     """
-    # In v0.1 we apply only one active event if exists (first match).
     for e in network.events:
         if e.event_type not in ("valve_close", "pump_trip"):
             continue
+        if target_uid is not None and getattr(e, "target_uid", None) != target_uid:
+            continue
+
         if t <= e.t_start:
             return 1.0
         if t >= e.t_end:
             return 0.0
-        # linear closure
+        if e.t_end == e.t_start:
+            return 0.0
         return 1.0 - (t - e.t_start) / (e.t_end - e.t_start)
+
     return None
 
 
@@ -127,15 +142,21 @@ def run_moc_v01(
     """
     Minimal MOC solver for a single chain of pipes.
 
-    - Upstream boundary: reservoir head fixed (H = H_res)
+    - Upstream boundary: head fixed (H = H_up)
     - Downstream boundary:
-        * if downstream node is reservoir: head fixed
+        * if downstream node is reservoir: head fixed (H = H_dn)
         * else if events include valve_close or pump_trip: enforce Q_end = Q0*phi(t)
-        * else: keep Q_end = Q0 (not realistic, but keeps model defined)
+        * else: keep Q_end = Q0 (fallback)
 
     Cavitation:
-    - detect H < Hvap
-    - optionally clamp H to Hvap (no cavity volume model yet)
+    - detect H < hvap_m
+    - optionally clamp H to hvap_m (no cavity volume model yet)
+
+    Initial conditions:
+    - Q(t=0,x) = Q0 uniform
+    - H(t=0,x) depends on cfg.init_mode:
+        * "flat": H = H_up (or linear if both reservoirs exist)
+        * "steady_friction": build H consistent with R*Q|Q| losses (+ optional correction to match H_dn)
     """
     g = network.gravity
 
@@ -148,7 +169,7 @@ def run_moc_v01(
 
     H_up = float(up_node.bc_value)
 
-    H_dn = None
+    H_dn: Optional[float] = None
     if dn_node.bc_type == "reservoir" and dn_node.bc_value is not None:
         H_dn = float(dn_node.bc_value)
 
@@ -157,8 +178,6 @@ def run_moc_v01(
     times = np.arange(nt) * dt
 
     # Build global grid by concatenating pipe meshes (avoid double-count at junctions)
-    # We'll assign segment properties per segment index.
-    # Global points: npts = sum(n_cells) + 1
     mesh_list = []
     for p in chain:
         m = disc.meshes_by_pipe[p.uid]
@@ -195,25 +214,57 @@ def run_moc_v01(
     B_seg = a_seg / (g * A_seg)  # [s/m^2]
     R_seg = (f_seg * dx_seg) / (2.0 * g * D_seg * (A_seg ** 2))  # multiplies Q|Q|
 
-    # Initial conditions: Q uniform, H linear between reservoirs if both exist, else flat at H_up
+    # -----------------------------
+    # Initial conditions
+    # -----------------------------
     Q0 = float(cfg.q0_m3s)
     Q = np.full(npts, Q0, dtype=float)
 
-    if H_dn is not None:
-        H = np.linspace(H_up, H_dn, npts, dtype=float)
-    else:
-        # Steady-state head profile for constant Q0 including friction losses
-        dH_seg = R_seg * Q0 * abs(Q0)   # length n_cells_total
-        H = np.empty(npts, dtype=float)
-        H[0] = H_up
-        for i in range(1, npts):
-            # node i is after segment i-1
-            H[i] = H[i-1] - dH_seg[i-1]
+    init_mode = (cfg.init_mode or "steady_friction").strip().lower()
 
+    if init_mode == "flat":
+        if H_dn is not None:
+            H = np.linspace(H_up, H_dn, npts, dtype=float)
+        else:
+            H = np.full(npts, H_up, dtype=float)
+
+    elif init_mode == "steady_friction":
+        # Build H profile consistent with friction losses for Q0
+        H = np.zeros(npts, dtype=float)
+        H[0] = H_up
+        qabs = Q0 * abs(Q0)
+
+        for i in range(npts - 1):
+            H[i + 1] = H[i] - R_seg[i] * qabs
+
+        # If downstream reservoir exists, enforce exact match by distributing correction along length
+        if H_dn is not None:
+            H_end_pred = float(H[-1])
+            delta = H_end_pred - float(H_dn)
+
+            if abs(delta) > 0.0:
+                cumL = np.zeros(npts, dtype=float)
+                cumL[1:] = np.cumsum(dx_seg)
+                Ltot = float(cumL[-1]) if float(cumL[-1]) > 0 else float(npts - 1)
+
+                # subtract linear ramp so end becomes H_dn
+                H = H - delta * (cumL / Ltot)
+                H[0] = H_up
+                H[-1] = float(H_dn)
+
+    else:
+        raise ValueError(f"init_mode inválido: {cfg.init_mode!r}. Usa 'flat' o 'steady_friction'.")
+
+    # -----------------------------
+    # Allocate history
+    # -----------------------------
     H_hist = np.zeros((nt, npts), dtype=float)
     Q_hist = np.zeros((nt, npts), dtype=float)
     cav = np.zeros((nt, npts), dtype=bool)
 
+    # -----------------------------
+    # Time marching
+    # -----------------------------
     for it, t in enumerate(times):
         H_hist[it, :] = H
         Q_hist[it, :] = Q
@@ -235,7 +286,6 @@ def run_moc_v01(
             Cplus = H[i - 1] + B_L * Q[i - 1] - R_L * Q[i - 1] * abs(Q[i - 1])
             Cminus = H[i + 1] - B_R * Q[i + 1] - R_R * Q[i + 1] * abs(Q[i + 1])
 
-            # average B for update (starter approach)
             B_avg = 0.5 * (B_L + B_R)
 
             Hn[i] = 0.5 * (Cplus + Cminus)
@@ -246,7 +296,6 @@ def run_moc_v01(
 
         # upstream boundary: fixed head
         Hn[0] = H_up
-        # get Q from C- using segment 0
         B0 = B_seg[0]
         R0 = R_seg[0]
         Cminus0 = H[1] - B0 * Q[1] - R0 * Q[1] * abs(Q[1])
@@ -260,17 +309,19 @@ def run_moc_v01(
             CplusN = H[-2] + Bn * Q[-2] - Rn * Q[-2] * abs(Q[-2])
             Qn[-1] = (CplusN - Hn[-1]) / Bn
         else:
-            # Apply event-based closure if exists
-            phi = _event_valve_factor(network, t)
+            # Apply event-based closure if exists (prefer targeting dn node)
+            phi = _event_valve_factor(network, t, target_uid=dn_uid)
+            if phi is None:
+                # fallback: any applicable event (backward compatible)
+                phi = _event_valve_factor(network, t, target_uid=None)
+
             if phi is not None:
-                Qn[-1] = Q0 * phi
-                # compute H using C+ (from last interior point)
+                Qn[-1] = Q0 * float(phi)
                 Bn = B_seg[-1]
                 Rn = R_seg[-1]
                 CplusN = H[-2] + Bn * Q[-2] - Rn * Q[-2] * abs(Q[-2])
                 Hn[-1] = CplusN - Bn * Qn[-1]
             else:
-                # fallback: keep Q constant
                 Qn[-1] = Q0
                 Bn = B_seg[-1]
                 Rn = R_seg[-1]
@@ -292,6 +343,7 @@ def run_moc_v01(
         "dn_node_uid": dn_uid,
         "has_downstream_reservoir": H_dn is not None,
         "assumption": "v0.1 single-chain MOC solver",
+        "init_mode": init_mode,
     }
 
     return MocResults(times=times, H=H_hist, Q=Q_hist, cavitation=cav, Hmax=Hmax, Hmin=Hmin, meta=meta)

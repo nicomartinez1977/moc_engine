@@ -89,6 +89,6 @@ series_by_id = extract_timeseries_for_crossings_mca(net, res, prof, geom, cross_
 name_by_id = {c.cruce_id: c.nombre for c in cross_specs}
 export_timeseries_to_excel(series_by_id, "series_cruces.xlsx", name_by_id=name_by_id)
 
-plot_all_crossings(series_by_id, out_folder="plots_cruces", name_by_id=name_by_id)
+#plot_all_crossings(series_by_id, out_folder="plots_cruces", name_by_id=name_by_id)
 
 print("SERIES (EXCEL) + PLOTS OK")
