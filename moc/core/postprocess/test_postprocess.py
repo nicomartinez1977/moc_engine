@@ -1,3 +1,10 @@
+
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+print(sys.path[0])
+
 from moc.adapters.excel.read_excel import load_network_from_excel
 
 from moc.core.build.validate import validate_network, raise_on_errors

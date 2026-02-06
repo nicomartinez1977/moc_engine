@@ -125,4 +125,5 @@ def compute_friction_from_q0(
         },
     )
 
+
     return new_network, result

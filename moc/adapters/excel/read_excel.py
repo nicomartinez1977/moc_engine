@@ -20,6 +20,7 @@ SHEET_NODO = "nodo"
 SHEET_TUBERIA = "tuberia"
 SHEET_EVENTOS = "eventos"
 SHEET_CONFIG = "config"
+SHEET_FLUIDO = "fluido"  # ✅ nuevo (opcional pero recomendado)
 
 # =========================
 # Columnas requeridas (fila 1 del Excel)
@@ -28,6 +29,7 @@ REQ_NODO = {"nodo_id", "Nombre", "Cota", "Condicion de Borde", "Valor Condcion d
 REQ_TUBO = {"tubo_id", "Nombre Tramo", "nodo inicial", "nodo final", "Longitud", "Diametro Interno", "Material", "Espesor","Rugosidad Absoluta"}
 REQ_EVENTO = {"evento_id", "Tipo de Evento", "Tipo de Objetivo", "objetivo_id", "Tiempo Inicio", "Tiempo Fin"}
 REQ_CONFIG = {"Variable", "Valor"}
+REQ_FLUIDO = {"Densidad", "Viscosidad Cinemática", "Elasticidad"}
 
 # =========================
 # Mapeos (Excel español -> core inglés)
@@ -282,10 +284,10 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
     # -----------------------------
     config: Dict[str, Any] = {}
     for _, r in df_config.iterrows():
-        key = _norm_lower(r["clave"])
+        key = _norm_lower(r["Variable"])
         if not key:
             continue
-        val = r["valor"]
+        val = r["Valor"]
 
         if isinstance(val, str):
             v = val.strip()
@@ -309,20 +311,20 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         # tomamos la primera fila no vacía
         first = None
         for _, rr in df_fluido.iterrows():
-            if any(_norm_str(rr.get(c, "")) for c in ["rho_kgm3", "nu_m2s", "K_Pa"]):
+            if any(_norm_str(rr.get(c, "")) for c in ["Densidad", "Viscosidad Cinemática", "Elasticidad"]):
                 first = rr
                 break
         if first is not None:
-            rho = _maybe_float(first.get("rho_kgm3"))
-            nu_f = _maybe_float(first.get("nu_m2s"))
-            K = _maybe_float(first.get("K_Pa"))
+            rho = _maybe_float(first.get("Densidad"))
+            nu_f = _maybe_float(first.get("Viscosidad Cinemática"))
+            K = _maybe_float(first.get("Elasticidad"))
 
             if rho is not None:
-                config["rho_kgm3"] = rho
+                config["Densidad"] = rho
             if nu_f is not None:
-                config["nu_m2s"] = nu_f
+                config["Viscosidad Cinemática"] = nu_f
             if K is not None:
-                config["k_pa"] = K
+                config["Elasticidad"] = K
 
     # -----------------------------
     # NODES
@@ -340,21 +342,21 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         if not nodo_id:
             continue
 
-        name = _norm_str(r["nombre"]) or nodo_id
-        z = _as_float(r["cota_m"], "cota_m", SHEET_NODO, f"nodo_id={nodo_id}")
+        name = _norm_str(r["Nombre"]) or nodo_id
+        z = _as_float(r["Cota"], "cota_m", SHEET_NODO, f"nodo_id={nodo_id}")
 
-        bc_sp = _norm_lower(r["tipo_cond_borde"]) or "none"
+        bc_sp = _norm_lower(r["Condicion de Borde"]) or "none"
         if bc_sp not in BC_MAP:
             raise ValueError(
-                f"[{SHEET_NODO}] tipo_cond_borde inválido en nodo_id={nodo_id}: {bc_sp!r}. "
+                f"[{SHEET_NODO}] Condicion de Borde inválido en nodo_id={nodo_id}: {bc_sp!r}. "
                 f"Permitidos: {sorted(BC_MAP.keys())}"
             )
         bc_type = BC_MAP[bc_sp]
 
-        bc_value_norm = _maybe_float(r["valor_cond_borde"])
+        bc_value_norm = _maybe_float(r["Valor Condcion de Borde"])
         if bc_type != "none" and bc_value_norm is None:
             raise ValueError(
-                f"[{SHEET_NODO}] Falta valor_cond_borde para nodo_id={nodo_id} cuando tipo_cond_borde={bc_sp!r}"
+                f"[{SHEET_NODO}] Falta Valor Condcion de Borde para nodo_id={nodo_id} cuando Condicion de Borde={bc_sp!r}"
             )
 
         external_id = _norm_str(r.get("external_id", "")) or None
@@ -389,38 +391,38 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         if not tubo_id:
             continue
 
-        name = _norm_str(r["nombre"]) or tubo_id
+        name = _norm_str(r["Nombre Tramo"]) or tubo_id
 
-        n_from_excel = _norm_str(r["nodo_inicio"])
-        n_to_excel = _norm_str(r["nodo_fin"])
+        n_from_excel = _norm_str(r["nodo inicial"])
+        n_to_excel = _norm_str(r["nodo final"])
 
         if n_from_excel not in node_uid_by_excel_id:
-            raise ValueError(f"[{SHEET_TUBERIA}] nodo_inicio desconocido '{n_from_excel}' (tubo_id={tubo_id})")
+            raise ValueError(f"[{SHEET_TUBERIA}] nodo inicial desconocido '{n_from_excel}' (tubo_id={tubo_id})")
         if n_to_excel not in node_uid_by_excel_id:
-            raise ValueError(f"[{SHEET_TUBERIA}] nodo_fin desconocido '{n_to_excel}' (tubo_id={tubo_id})")
+            raise ValueError(f"[{SHEET_TUBERIA}] nodo final desconocido '{n_to_excel}' (tubo_id={tubo_id})")
 
         node_from = node_uid_by_excel_id[n_from_excel]
         node_to = node_uid_by_excel_id[n_to_excel]
 
-        L = _as_float(r["longitud_m"], "longitud_m", SHEET_TUBERIA, f"tubo_id={tubo_id}")
+        L = _as_float(r["Longitud"], "Longitud", SHEET_TUBERIA, f"tubo_id={tubo_id}")
 
         # mm -> m
-        D_mm = _as_float(r["diametro_int_mm"], "diametro_int_mm", SHEET_TUBERIA, f"tubo_id={tubo_id}")
+        D_mm = _as_float(r["Diametro Interno"], "Diametro Interno", SHEET_TUBERIA, f"tubo_id={tubo_id}")
         D = D_mm / 1000.0
 
-        e_mm = _maybe_float(r.get("espesor_mm", None))
+        e_mm = _maybe_float(r.get("Espesor", None))
         thickness = (e_mm / 1000.0) if e_mm is not None else None
 
         # ✅ rugosidad absoluta: mm -> m
-        eps_mm = _maybe_float(r.get("rugosidad_abs_mm", None))
+        eps_mm = _maybe_float(r.get("Rugosidad Absoluta", None))
         roughness = (eps_mm / 1000.0) if eps_mm is not None else None
 
-        material_sp = _norm_str(r.get("material", "")) or None
+        material_sp = _norm_str(r.get("Material", "")) or None
         material = MATERIAL_MAP.get(material_sp, material_sp) if material_sp else None
 
-        elasticity = _maybe_float(r.get("E_Pa", None))
-        poisson = _maybe_float(r.get("nu", None))  # Poisson del material
-        wave_speed = _maybe_float(r.get("a_mps", None))
+        elasticity = _maybe_float(r.get("Modulo Elasticidad", None))
+        poisson = _maybe_float(r.get("Poisson", None))  # Poisson del material
+        wave_speed = _maybe_float(r.get("Celeridad", None))
         dx_target = _maybe_float(r.get("dx_obj_m", None))
 
         external_id = _norm_str(r.get("external_id", "")) or None
@@ -463,22 +465,22 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
         raise ValueError(f"[{SHEET_EVENTOS}] evento_id duplicado: {dup_eventos}")
 
     for _, r in df_evento.iterrows():
-        evento_id = _norm_str(r["evento_id"])
+        evento_id = _norm_str(r["Tipo de Evento"])
         if not evento_id:
             continue
 
-        tipo_sp = _norm_lower(r["tipo_evento"])
+        tipo_sp = _norm_lower(r["Tipo de Evento"])
         if tipo_sp not in EVENT_MAP:
             raise ValueError(
-                f"[{SHEET_EVENTOS}] tipo_evento inválido en evento_id={evento_id}: {tipo_sp!r}. "
+                f"[{SHEET_EVENTOS}] Tipo de Evento inválido en evento_id={evento_id}: {tipo_sp!r}. "
                 f"Permitidos: {sorted(EVENT_MAP.keys())}"
             )
         event_type = EVENT_MAP[tipo_sp]
 
-        obj_tipo = _norm_lower(r["objetivo_tipo"])
+        obj_tipo = _norm_lower(r["Tipo de Objetivo"])
         if obj_tipo not in ALLOWED_OBJETIVO_TIPO:
             raise ValueError(
-                f"[{SHEET_EVENTOS}] objetivo_tipo inválido en evento_id={evento_id}: {obj_tipo!r}. "
+                f"[{SHEET_EVENTOS}] Tipo de Objetivo inválido en evento_id={evento_id}: {obj_tipo!r}. "
                 f"Permitidos: {sorted(ALLOWED_OBJETIVO_TIPO)}"
             )
 
@@ -492,10 +494,10 @@ def load_network_from_excel(path: str) -> Tuple[Network, Dict[str, Any], ExcelId
                 raise ValueError(f"[{SHEET_EVENTOS}] objetivo_id tubo desconocido '{obj_id}' (evento_id={evento_id})")
             target_uid = pipe_uid_by_excel_id[obj_id]
 
-        t_start = _as_float(r["t_inicio_s"], "t_inicio_s", SHEET_EVENTOS, f"evento_id={evento_id}")
-        t_end = _as_float(r["t_fin_s"], "t_fin_s", SHEET_EVENTOS, f"evento_id={evento_id}")
+        t_start = _as_float(r["Tiempo Inicio"], "Tiempo Inicio", SHEET_EVENTOS, f"evento_id={evento_id}")
+        t_end = _as_float(r["Tiempo Fin"], "Tiempo Fin", SHEET_EVENTOS, f"evento_id={evento_id}")
         if t_end < t_start:
-            raise ValueError(f"[{SHEET_EVENTOS}] t_fin_s < t_inicio_s en evento_id={evento_id}")
+            raise ValueError(f"[{SHEET_EVENTOS}] Tiempo Fin < Tiempo Inicio en evento_id={evento_id}")
 
         params = _parse_params_json(r.get("parametros_json", ""))
 

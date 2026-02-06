@@ -57,16 +57,15 @@ def compute_wave_speed(
             )
         e = float(e)
         if e <= 0:
-            raise ValueError(f"Pipe(uid={uid}, name={p.name}) has invalid thickness={e}")
+            raise ValueError(f"Pipe(uid={uid}, name={p.name}) tiene un espesor inválido={e}")
 
         E = float(p.elasticity) if p.elasticity is not None else float(default_E_pa)
         if E <= 0:
-            raise ValueError(f"Pipe(uid={uid}, name={p.name}) has invalid elasticity E={E}")
+            raise ValueError(f"Pipe(uid={uid}, name={p.name}) tiene una elasticidad inválida E={E}")
 
         nu = float(p.poisson) if p.poisson is not None else float(default_nu)
         if not (-0.5 < nu < 0.5):
-            raise ValueError(f"Pipe(uid={uid}, name={p.name}) has invalid poisson nu={nu}")
-
+            raise ValueError(f"Pipe(uid={uid}, name={p.name}) tiene un poisson inválido nu={nu}")
         # wave speed
         term = (1.0 / K_pa) + (D / (E * e)) * (1.0 - nu**2)
         a = 1.0 / (rho * term) ** 0.5
