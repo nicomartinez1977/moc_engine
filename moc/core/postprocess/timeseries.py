@@ -1,9 +1,9 @@
 from __future__ import annotations
+# moc/core/postprocess/timeseries.py
+from __future__ import annotations
 
-from csv import writer
-from csv import writer
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -14,14 +14,12 @@ from moc.core.postprocess.geometry import GeometryProfile
 from moc.core.solver.moc_solver import MocResults
 
 
-# -------------------------
-# Helpers (interpolation)
-# -------------------------
+# =========================
+# Helpers (interpolación)
+# =========================
+
 def _interp_spatial_scalar(x: np.ndarray, y: np.ndarray, xq: float) -> float:
-    """
-    Linear interpolation y(xq) given monotonic x.
-    Raises if outside range (estricto, ingeniería).
-    """
+    """Interpolación lineal escalar y(xq) con x monótono (estricto)."""
     if xq < float(x[0]) or xq > float(x[-1]):
         raise ValueError(
             f"El punto s_m={xq} está fuera del rango del perfil [{float(x[0])}, {float(x[-1])}] m."
@@ -42,9 +40,7 @@ def _interp_spatial_scalar(x: np.ndarray, y: np.ndarray, xq: float) -> float:
 
 
 def _interp_series_spatial(res: MocResults, s: np.ndarray, s_q: float) -> np.ndarray:
-    """
-    Interpola H(t, s_q) espacialmente para todos los tiempos.
-    """
+    """Interpola H(t, s_q) espacialmente para todos los tiempos."""
     if s_q < float(s[0]) or s_q > float(s[-1]):
         raise ValueError(f"El punto s_m={s_q} está fuera del rango [{float(s[0])}, {float(s[-1])}] m.")
 
@@ -60,9 +56,38 @@ def _interp_series_spatial(res: MocResults, s: np.ndarray, s_q: float) -> np.nda
     return (1.0 - w) * res.H[:, j0] + w * res.H[:, j1]
 
 
-# -------------------------
+def downsample_by_time(df: pd.DataFrame, *, write_every_s: float, t_col: str = "t") -> pd.DataFrame:
+    """
+    Downsample por tiempo (mantiene primer y último punto).
+    - write_every_s <= 0 => devuelve df completo
+    Requiere que df[t_col] sea creciente.
+    """
+    if write_every_s is None or float(write_every_s) <= 0:
+        return df
+
+    dt = float(write_every_s)
+    t = df[t_col].to_numpy(dtype=float)
+
+    if t.size == 0:
+        return df
+
+    keep = np.zeros_like(t, dtype=bool)
+    keep[0] = True
+    last = t[0]
+
+    for i in range(1, len(t) - 1):
+        if t[i] - last >= dt:
+            keep[i] = True
+            last = t[i]
+
+    keep[-1] = True
+    return df.loc[keep].reset_index(drop=True)
+
+
+# =========================
 # Public API
-# -------------------------
+# =========================
+
 @dataclass(frozen=True)
 class CrossingSpec:
     cruce_id: str
@@ -79,11 +104,13 @@ def read_crossings_csv(path_csv: str) -> List[CrossingSpec]:
 
     out: List[CrossingSpec] = []
     for _, r in df.iterrows():
-        out.append(CrossingSpec(
-            cruce_id=str(r["cruce_id"]).strip(),
-            nombre=str(r["nombre"]).strip(),
-            s_m=float(r["s_m"]),
-        ))
+        out.append(
+            CrossingSpec(
+                cruce_id=str(r["cruce_id"]).strip(),
+                nombre=str(r["nombre"]).strip(),
+                s_m=float(r["s_m"]),
+            )
+        )
     return out
 
 
@@ -96,12 +123,16 @@ def extract_timeseries_at_s_mca(
     s_m: float,
 ) -> pd.DataFrame:
     """
-    Serie tiempo en posición s_m con columnas:
-      t, H, z, P
-    Unidades:
-      t [s], H [m], z [m], P [mca] (P = H - z)
+    Serie tiempo en posición s_m:
+      columnas: t, H, z, P
 
-    Nota: aquí no usamos Pa/bar; todo en m/mca.
+    Unidades:
+      t [s]
+      H [m]   (cota piezométrica)
+      z [m]   (cota geométrica)
+      P [mca] (presión manométrica como H - z)
+
+    Nota: aquí no usamos Pa/bar; todo en m / mca.
     """
     # H(t)
     H_ts = _interp_series_spatial(res, prof.s_m, float(s_m))
@@ -112,13 +143,14 @@ def extract_timeseries_at_s_mca(
     # Presión manométrica en mca
     P_ts = H_ts - z_q
 
-    df = pd.DataFrame({
-        "t": res.times,
-        "H": H_ts,
-        "z": np.full_like(H_ts, z_q, dtype=float),
-        "P": P_ts,
-    })
-    return df
+    return pd.DataFrame(
+        {
+            "t": np.asarray(res.times, dtype=float),
+            "H": np.asarray(H_ts, dtype=float),
+            "z": np.full_like(H_ts, z_q, dtype=float),
+            "P": np.asarray(P_ts, dtype=float),
+        }
+    )
 
 
 def extract_timeseries_for_crossings_mca(
@@ -129,7 +161,7 @@ def extract_timeseries_for_crossings_mca(
     crossings: List[CrossingSpec],
 ) -> Dict[str, pd.DataFrame]:
     """
-    Retorna dict: cruce_id -> DataFrame (t, H, z, P) en m/mca.
+    Retorna dict: cruce_id -> DataFrame (t, H, z, P).
     """
     out: Dict[str, pd.DataFrame] = {}
     for c in crossings:
@@ -137,204 +169,128 @@ def extract_timeseries_for_crossings_mca(
     return out
 
 
-# -------------------------
-# Export helpers (2-row header: names + units)
-# -------------------------
-_UNITS_TS = {"t": "s", "H": "m", "z": "m", "P": "mca"}
+# =========================
+# Exports
+# =========================
+
+_UNITS = {"t": "s", "H": "m", "z": "m", "P": "mca"}
 
 
-def _df_with_units_row(df: pd.DataFrame, units: Dict[str, str]) -> pd.DataFrame:
+def export_timeseries_to_csv_folder(series_by_id: Dict[str, pd.DataFrame], folder: str) -> List[str]:
     """
-    Returns a new DataFrame where the first row is units.
-    Column names remain the variable names (no units in name).
+    Exporta CSV por cada serie (sin fila de unidades).
+    Retorna lista de paths generados.
     """
-    unit_row = {col: units.get(col, "-") for col in df.columns}
-    df2 = pd.concat([pd.DataFrame([unit_row]), df], ignore_index=True)
-    return df2
+    import os
 
-def _downsample_df_by_time(df: pd.DataFrame, t_col: str, every_s: float) -> pd.DataFrame:
-    """Devuelve df muestreado cada every_s (aprox), manteniendo el primer y último punto."""
-    if every_s is None or every_s <= 0:
-        return df
-
-    t = df[t_col].to_numpy(dtype=float)
-    if t.size < 2:
-        return df
-
-    t0 = float(t[0])
-    t1 = float(t[-1])
-
-    targets = np.arange(t0, t1 + 1e-12, every_s)
-    idx = np.searchsorted(t, targets, side="left")
-    idx = np.clip(idx, 0, len(t) - 1)
-    idx = np.unique(idx)
-
-    # asegurar primer y último
-    if idx[0] != 0:
-        idx = np.insert(idx, 0, 0)
-    if idx[-1] != len(t) - 1:
-        idx = np.append(idx, len(t) - 1)
-
-    return df.iloc[idx].reset_index(drop=True)
+    os.makedirs(folder, exist_ok=True)
+    out_paths: List[str] = []
+    for cid, df in series_by_id.items():
+        path = os.path.join(folder, f"serie_{cid}.csv")
+        df.to_csv(path, index=False)
+        out_paths.append(path)
+    return out_paths
 
 
 def export_timeseries_to_excel(
     series_by_id: Dict[str, pd.DataFrame],
-    path_xlsx: str,
-    write_every_s: float = 0.5,
+    out_xlsx: str,
     *,
+    write_every_s: float = 0.0,
     name_by_id: Optional[Dict[str, str]] = None,
-    max_sheetname_len: int = 31,
+    y_cols_for_chart: Iterable[str] = ("H",),
 ) -> None:
-    
     """
-    Exporta cada serie como una hoja distinta en un Excel, con:
-      - 2 filas de encabezado: nombres + unidades
-      - formato: negrita y centrado en encabezados
-      - gráfico: H vs t (título = nombre de hoja)
+    Exporta un Excel multi-hoja:
+    - Fila 1: nombres de variables (negrita, centrado)
+    - Fila 2: unidades (centrado)
+    - Datos desde fila 3
+    - Gráfico Scatter Smooth (H vs t por defecto) con:
+        - título = nombre de hoja
+        - ejes: "t [s]" y "<var> [unidad]"
+    - write_every_s: downsample por tiempo para aligerar el archivo.
+
+    name_by_id:
+      si se entrega, el nombre de hoja será f"{cruce_id} - {nombre}" (truncado a 31 chars).
     """
-    from openpyxl.styles import Font, Alignment, Border, Side, fills, PatternFill
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    from openpyxl.chart import ScatterChart, Reference, Series
     from openpyxl.utils import get_column_letter
-    from openpyxl.chart import LineChart, Reference, ScatterChart, Series
-    from openpyxl.chart.axis import DisplayUnitsLabel, DisplayUnitsLabelList
-    from openpyxl.chart.text import RichText
-    from openpyxl.drawing.text import Paragraph, ParagraphProperties, CharacterProperties, Font as DrawingFont
 
-    # Unidades por columna (ajusta si cambias nombres)
-    UNITS = {
-        "t": "s",
-        "H": "mca",
-        "z": "m",
-        "P_bar": "bar",
-        "P": "m",
-    }
+    wb = Workbook()
+    # elimina hoja por defecto
+    wb.remove(wb.active)
 
-    def _sheet_name(cid: str) -> str:
-        base = cid
+    header_font = Font(name="Verdana", bold=True)
+    units_font = Font(name="Verdana", bold=False)
+    header_align = Alignment(horizontal="center", vertical="center")
+    units_align = Alignment(horizontal="center", vertical="center")
+
+    for cid, df0 in series_by_id.items():
+        df = downsample_by_time(df0, write_every_s=float(write_every_s), t_col="t")
+
+        # nombre de hoja (máx 31)
+        sheet_name = cid
         if name_by_id and cid in name_by_id and name_by_id[cid]:
-            base = f"{name_by_id[cid]}"
-        sheet = "".join(ch for ch in base if ch not in r'[]:*?/\\').strip()
-        if not sheet:
-            sheet = cid
-        return sheet[:max_sheetname_len]
+            sheet_name = f"{name_by_id[cid]}"
+        sheet_name = sheet_name[:31]
 
-    header_font = Font(name="Verdana", bold=True,size=10, color="FFFFFF")  # o bold=True si prefieres
-    units_font = Font(bold=True,size=10,name="Verdana", color="FFFFFF")  # o bold=True si prefieres
-    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    data_font = Font(bold=False,size=10,name="Verdana")
+        ws = wb.create_sheet(title=sheet_name)
 
-    with pd.ExcelWriter(path_xlsx, engine="openpyxl") as writer:
-        for cid, df in series_by_id.items():
-            sheet = _sheet_name(cid)
+        # orden de columnas: t, H, z, P (si existen)
+        preferred = [c for c in ["t", "H", "z", "P"] if c in df.columns]
+        other = [c for c in df.columns if c not in preferred]
+        cols = preferred + other
 
-            # Asegurar orden de columnas típico si existe
-            preferred = [c for c in ["t", "H", "z", "P", "P"] if c in df.columns]
-            rest = [c for c in df.columns if c not in preferred]
-            df_out = df[preferred + rest] if preferred else df
+        # --- escribir encabezados
+        for j, col in enumerate(cols, start=1):
+            c1 = ws.cell(row=1, column=j, value=col)
+            c1.font = header_font
+            c1.alignment = header_align
 
-            
-            # Downsample para no dejar el Excel pesado
-            df_out = _downsample_df_by_time(df_out, "t", every_s=write_every_s)
+            unit = _UNITS.get(col, "")
+            c2 = ws.cell(row=2, column=j, value=unit)
+            c2.font = units_font
+            c2.alignment = units_align
 
-            # Escribir DATA desde la fila 3 (startrow=2), sin header
-            df_out.to_excel(writer, sheet_name=sheet, index=False, header=False, startrow=2)
+        # --- datos
+        for i in range(len(df)):
+            for j, col in enumerate(cols, start=1):
+                ws.cell(row=3 + i, column=j, value=float(df.iloc[i][col]))
 
-            ws = writer.sheets[sheet]
-            for row in ws.iter_rows(min_row=3, max_row=ws.max_row):
-                for cell in row:
-                    cell.font = data_font
-                    cell.alignment = center
-                    cell.number_format = '0.00'  # formato numérico simple
-                    cell.border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
-            # Fila 1: nombres de columnas
-            for j, col in enumerate(df_out.columns, start=1):
-                cell = ws.cell(row=1, column=j, value=str(col))
-                cell.font = header_font
-                cell.alignment = center
-                cell.border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style=None))
-                cell.fill = PatternFill(patternType="solid", fgColor="FF9900")  
+        # --- formato columnas (ancho)
+        for j, col in enumerate(cols, start=1):
+            letter = get_column_letter(j)
+            ws.column_dimensions[letter].width = max(10, min(18, len(col) + 6))
 
-            # Fila 2: unidades (si no existe, deja vacío)
-            for j, col in enumerate(df_out.columns, start=1):
-                unit = UNITS.get(str(col), "")
-                cell = ws.cell(row=2, column=j, value=f"[{unit}]" if unit else "")
-                cell.font = units_font
-                cell.alignment = center
-                cell.border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
-                cell.fill = PatternFill(patternType="solid", fgColor="FF9900")
+        # congelar panes debajo de encabezados
+        ws.freeze_panes = "A3"
 
-            # Congelar paneles bajo las 2 primeras filas
-            ws.freeze_panes = "A3"
+        # --- gráfico H vs t (o y_cols_for_chart)
+        y_cols = [c for c in y_cols_for_chart if c in cols]
+        if ("t" in cols) and y_cols and len(df) > 1:
+            chart = ScatterChart()
+            chart.smooth = True
+            chart.title = sheet_name
+            chart.x_axis.title = "t [s]"
 
-            # Auto-ancho simple de columnas
-            for j, col in enumerate(df_out.columns, start=1):
-                col_letter = get_column_letter(j)
-                # ancho basado en header + una muestra de datos
-                sample = [str(col), UNITS.get(str(col), "")]
-                if len(df_out) > 0:
-                    sample += [str(df_out.iloc[0, j-1])]
-                width = min(max(len(s) for s in sample) + 4, 28)
-                ws.column_dimensions[col_letter].width = width
+            if len(y_cols) == 1:
+                y0 = y_cols[0]
+                chart.y_axis.title = f"{y0} [{_UNITS.get(y0, '')}]".rstrip()
+            else:
+                chart.y_axis.title = " / ".join([f"{y} [{_UNITS.get(y,'')}]" for y in y_cols]).rstrip()
 
-            # ------------------------------------------------------------
-            # Gráfico H vs t (si existen columnas)
-            # ------------------------------------------------------------
-            
-            if "t" in df_out.columns and "H" in df_out.columns:
-                col_t = list(df_out.columns).index("t") + 1
-                col_h = list(df_out.columns).index("H") + 1
-                #col_P = list(df_out.columns).index("P") + 1
+            x_col_idx = cols.index("t") + 1
+            xvalues = Reference(ws, min_col=x_col_idx, min_row=3, max_row=2 + len(df))
 
-                nrows = len(df_out)
-                first_data_row = 3
-                last_data_row = first_data_row + nrows - 1
+            for y in y_cols:
+                y_col_idx = cols.index(y) + 1
+                values = Reference(ws, min_col=y_col_idx, min_row=3, max_row=2 + len(df))
+                series = Series(values, xvalues, title=y)
+                chart.series.append(series)
 
-                # X values: t_s
-                xvalues = Reference(ws, min_col=col_t, min_row=3,max_row=63) #min_row=first_data_row, max_row=last_data_row)
-                # Y values: H_m
-                yvalues = Reference(ws, min_col=col_h, min_row=3,max_row=63) #min_row=first_data_row, max_row=last_data_row)
-                #Formatos de gráfico
-                chart = ScatterChart(scatterStyle="smooth")
-                chart.title = sheet  # título = nombre hoja
-                #chart.x_axis.delete = Falsegit
-                #chart.y_axis.delete = False
-                #chart.width = 15
-                #chart.height = 10
-                chart.x_axis.title = "Tiempo [s]"
-                chart.y_axis.title = "H [mca]"    
-                #chart.x_axis.delete = False
-                #chart.y_axis.delete = False
+            # posición del gráfico
+            ws.add_chart(chart, "G3")
 
-
-                Serie1 = Series(yvalues, xvalues, title="H")
-                Serie1.marker.symbol = "none"
-                chart.series.append(Serie1)
-                chart.legend.position ="b"
-                # Ubicación del gráfico
-                ws.add_chart(chart, "G4")
-            
-
-
-def new_func():
-    return True
-
-
-
-def export_timeseries_to_csv_folder(
-    series_by_id: Dict[str, pd.DataFrame],
-    folder: str,
-) -> List[str]:
-    """
-    Exporta un CSV por cruce, con 2 filas header+unidad (igual que Excel).
-    """
-    import os
-    os.makedirs(folder, exist_ok=True)
-
-    out_paths: List[str] = []
-    for cid, df in series_by_id.items():
-        path = os.path.join(folder, f"serie_{cid}.csv")
-        df_out = _df_with_units_row(df, _UNITS_TS)
-        df_out.to_csv(path, index=False)
-        out_paths.append(path)
-
-    return out_paths
+    wb.save(out_xlsx)

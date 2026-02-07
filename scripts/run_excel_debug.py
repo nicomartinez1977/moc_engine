@@ -5,7 +5,7 @@ sys.path.insert(0, str(ROOT))
 print(sys.path[0])
 
 from moc.adapters.excel.read_excel import load_network_from_excel
-from moc.core.build.friction import compute_friction_from_q0
+from moc_engine.moc.core.hydraulics.friction import compute_friction_from_q0
 from moc.core.build.discretize import discretize_network
 from moc.core.build.wave_speed import compute_wave_speed
 from moc.core.build.timestep import compute_global_dt

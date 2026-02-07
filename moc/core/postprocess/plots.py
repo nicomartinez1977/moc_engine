@@ -42,7 +42,7 @@ def plot_timeseries_pressure(
     df = _normalize_columns(df)
 
     t_col = _find_col(df, ["t_s", "t", "time_s", "tiempo_s", "Tiempo", "tiempo"])
-    p_col = _find_col(df, ["P_bar", "p_bar", "pressure_bar", "presion_bar", "presión_bar"])
+    p_col = _find_col(df, ["P_bar", "p_bar", "pressure_bar", "presion_bar", "presión_bar", "P"])
 
     if t_col is None or p_col is None:
         raise KeyError(

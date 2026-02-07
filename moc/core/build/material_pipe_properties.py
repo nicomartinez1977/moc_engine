@@ -87,7 +87,6 @@ DEFAULT_POISSON_BY_MATERIAL: Dict[str, float] = {
     "frp": 0.25,
 }
 
-
 def apply_material_defaults(network: Network) -> Network:
     """
     Completa propiedades físicas faltantes (E, nu) usando material canónico.
